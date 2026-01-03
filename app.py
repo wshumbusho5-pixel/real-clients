@@ -371,6 +371,83 @@ def export_contacts():
     return jsonify({'success': True, 'path': csv_path, 'count': len(contacts)})
 
 
+@app.route('/api/export-for-skip-tracing')
+def export_for_skip_tracing():
+    """Export investor data formatted for skip tracing platforms"""
+    import re
+
+    tier = request.args.get('tier', None)
+    entity_type = request.args.get('entity_type', None)
+
+    df = load_investors(tier)
+
+    if df.empty:
+        return jsonify({'error': 'No data to export'})
+
+    # Filter by entity type if specified
+    if entity_type and 'entity_type' in df.columns:
+        df = df[df['entity_type'] == entity_type]
+
+    # Prepare skip tracing format
+    skip_data = []
+
+    for _, row in df.iterrows():
+        name = row.get('owner_name', '')
+        address = row.get('mailing_address', '') or row.get('owner_address', '')
+
+        # Parse name into first/last (for individuals)
+        name_parts = name.strip().split()
+        if len(name_parts) >= 2 and row.get('entity_type') == 'individual':
+            # Assume format: LASTNAME FIRSTNAME or FIRSTNAME LASTNAME
+            # Most property records use LASTNAME FIRSTNAME
+            last_name = name_parts[0]
+            first_name = ' '.join(name_parts[1:])
+        else:
+            first_name = name
+            last_name = ''
+
+        # Parse address into components
+        street = address
+        city = ''
+        state = 'OH'
+        zip_code = ''
+
+        # Try to extract city, state, zip from address
+        addr_match = re.search(r'^(.+?),?\s+([A-Za-z\s]+),?\s*([A-Z]{2})?\s*(\d{5})?', address)
+        if addr_match:
+            street = addr_match.group(1).strip()
+            city = addr_match.group(2).strip() if addr_match.group(2) else ''
+            state = addr_match.group(3) if addr_match.group(3) else 'OH'
+            zip_code = addr_match.group(4) if addr_match.group(4) else ''
+
+        skip_data.append({
+            'full_name': name,
+            'first_name': first_name,
+            'last_name': last_name,
+            'address': street,
+            'city': city,
+            'state': state,
+            'zip': zip_code,
+            'full_address': address,
+            'entity_type': row.get('entity_type', ''),
+            'portfolio_size': row.get('portfolio_size', ''),
+            'investor_score': row.get('investor_score', ''),
+            'investor_tier': row.get('investor_tier', ''),
+        })
+
+    export_df = pd.DataFrame(skip_data)
+    downloads_folder = os.path.expanduser('~/Downloads')
+    csv_path = os.path.join(downloads_folder, 'investors_for_skip_tracing.csv')
+    export_df.to_csv(csv_path, index=False)
+
+    return jsonify({
+        'success': True,
+        'path': csv_path,
+        'count': len(export_df),
+        'message': f'Exported {len(export_df)} investors to Downloads folder'
+    })
+
+
 @app.route('/api/stats')
 def get_stats():
     """Get summary statistics"""

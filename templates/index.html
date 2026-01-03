@@ -60,6 +60,8 @@
 
         .export-btn { padding: 10px 20px; background: #6366f1; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; }
         .export-btn:hover { background: #4f46e5; }
+        .export-skip-btn { padding: 10px 20px; background: #f59e0b; color: #0f172a; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; }
+        .export-skip-btn:hover { background: #d97706; }
         .save-btn { padding: 8px 16px; background: #22c55e; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; margin-top: 15px; }
         .save-btn:hover { background: #16a34a; }
         .delete-btn { padding: 5px 10px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
@@ -108,7 +110,10 @@
 
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
             <h2>Investor Prospects</h2>
-            <button class="run-btn" onclick="runPipeline()">Pull New Batch</button>
+            <div style="display: flex; gap: 10px;">
+                <button class="export-skip-btn" onclick="exportForSkipTracing()">Export for Skip Tracing</button>
+                <button class="run-btn" onclick="runPipeline()">Pull New Batch</button>
+            </div>
         </div>
 
         <div class="filters">
@@ -556,6 +561,28 @@
 
                 if (data.success) {
                     alert(`Exported ${data.count} contacts to:\n${data.path}`);
+                } else {
+                    alert(data.error || 'Export failed');
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        // Export for skip tracing
+        async function exportForSkipTracing() {
+            try {
+                let url = '/api/export-for-skip-tracing';
+                const params = [];
+                if (currentTier) params.push(`tier=${currentTier}`);
+                if (currentEntityType) params.push(`entity_type=${currentEntityType}`);
+                if (params.length) url += '?' + params.join('&');
+
+                const res = await fetch(url);
+                const data = await res.json();
+
+                if (data.success) {
+                    alert(`Exported ${data.count} investors for skip tracing!\n\nFile: ${data.path}\n\nColumns: full_name, first_name, last_name, address, city, state, zip`);
                 } else {
                     alert(data.error || 'Export failed');
                 }
