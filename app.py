@@ -119,6 +119,97 @@ def skip_trace_lookup():
         return jsonify({'success': False, 'error': str(e)})
 
 
+@app.route('/api/full-lookup', methods=['POST'])
+def full_lookup():
+    """
+    Full lookup chain: LLC → Ohio SOS → Agent Name → Skip Trace
+    Returns complete contact info for an LLC
+    """
+    data = request.get_json()
+    llc_name = data.get('name', '')
+
+    if not llc_name:
+        return jsonify({'error': 'LLC name required'})
+
+    result = {
+        'llc_name': llc_name,
+        'sos_data': None,
+        'agent_name': None,
+        'agent_address': None,
+        'contact_data': None,
+        'phone': None,
+        'email': None,
+        'steps': []
+    }
+
+    try:
+        # Step 1: Ohio SOS Lookup
+        result['steps'].append('Looking up LLC on Ohio SOS...')
+        from scrapers.ohio_sos import OhioSOSScraper
+        scraper = OhioSOSScraper(headless=False)
+        sos_result = scraper.search_business(llc_name)
+
+        if not sos_result:
+            result['steps'].append('LLC not found on Ohio SOS')
+            return jsonify({'success': False, 'error': 'LLC not found on Ohio SOS', 'data': result})
+
+        result['sos_data'] = sos_result.to_dict()
+        result['agent_name'] = sos_result.agent_name
+        result['agent_address'] = sos_result.agent_address
+        result['steps'].append(f'Found agent: {sos_result.agent_name}')
+
+        if not sos_result.agent_name:
+            result['steps'].append('No agent name found')
+            return jsonify({'success': True, 'data': result, 'message': 'Found LLC but no agent name'})
+
+        # Check if agent is a person (not a service company)
+        service_companies = ['NATIONAL REGISTERED AGENTS', 'CT CORPORATION', 'CSC',
+                           'REGISTERED AGENT SOLUTIONS', 'INCORP SERVICES', 'NORTHWEST REGISTERED']
+        is_service = any(svc in sos_result.agent_name.upper() for svc in service_companies)
+
+        if is_service:
+            result['steps'].append(f'Agent is a registered agent service - skip tracing not useful')
+            return jsonify({
+                'success': True,
+                'data': result,
+                'message': 'Agent is a service company, not a person'
+            })
+
+        # Step 2: Skip Trace the Agent
+        result['steps'].append(f'Skip tracing agent: {sos_result.agent_name}')
+        from scrapers.skip_tracing import SkipTracer
+        tracer = SkipTracer(provider="free")
+
+        # Parse city/state from agent address
+        city, state = "", "OH"
+        if sos_result.agent_address:
+            import re
+            addr_match = re.search(r'([A-Za-z\s]+)\s+([A-Z]{2})\s*\d*', sos_result.agent_address)
+            if addr_match:
+                city = addr_match.group(1).strip()
+                state = addr_match.group(2)
+
+        contact = tracer.lookup(sos_result.agent_name, sos_result.agent_address, city, state)
+
+        if contact and contact.has_contact():
+            result['contact_data'] = contact.to_dict()
+            result['phone'] = contact.phone_primary
+            result['email'] = contact.email_primary
+            result['steps'].append(f'Found contact: {contact.phone_primary or contact.email_primary}')
+            return jsonify({'success': True, 'data': result})
+        else:
+            result['steps'].append('No contact info found for agent')
+            return jsonify({
+                'success': True,
+                'data': result,
+                'message': 'Found agent but no contact info'
+            })
+
+    except Exception as e:
+        result['steps'].append(f'Error: {str(e)}')
+        return jsonify({'success': False, 'error': str(e), 'data': result})
+
+
 @app.route('/api/stats')
 def get_stats():
     """Get summary statistics"""
