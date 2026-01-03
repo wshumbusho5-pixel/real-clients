@@ -34,7 +34,10 @@ def load_investors(tier=None):
             investors.append(df)
 
     if investors:
-        return pd.concat(investors, ignore_index=True)
+        df = pd.concat(investors, ignore_index=True)
+        # Replace NaN with empty string to avoid JSON issues
+        df = df.fillna('')
+        return df
     return pd.DataFrame()
 
 
@@ -48,12 +51,17 @@ def index():
 def get_investors():
     """API endpoint for investor data"""
     tier = request.args.get('tier', None)
+    entity_type = request.args.get('entity_type', None)
     limit = int(request.args.get('limit', 100))
 
     df = load_investors(tier)
 
     if df.empty:
         return jsonify({'error': 'No data found. Run the pipeline first.', 'investors': []})
+
+    # Filter by entity type if specified
+    if entity_type and 'entity_type' in df.columns:
+        df = df[df['entity_type'] == entity_type]
 
     # Select key columns
     columns = ['owner_name', 'portfolio_size', 'total_market_value', 'entity_type',
@@ -66,6 +74,41 @@ def get_investors():
         'count': len(df),
         'investors': df.to_dict('records')
     })
+
+
+@app.route('/api/entity-types')
+def get_entity_types():
+    """Get list of unique entity types"""
+    df = load_investors()
+    if df.empty or 'entity_type' not in df.columns:
+        return jsonify({'types': []})
+
+    types = df['entity_type'].dropna().unique().tolist()
+    return jsonify({'types': sorted(types)})
+
+
+@app.route('/api/run-pipeline', methods=['POST'])
+def run_pipeline():
+    """Run the investor identification pipeline"""
+    try:
+        from data_processing.investor_pipeline import InvestorPipeline
+
+        pipeline = InvestorPipeline()
+        results = pipeline.run()
+
+        return jsonify({
+            'success': True,
+            'message': 'Pipeline completed successfully',
+            'results': {
+                'total_parcels': results.get('total_parcels', 0),
+                'total_investors': results.get('total_investors', 0),
+                'tier_1': results.get('tier_1_count', 0),
+                'tier_2': results.get('tier_2_count', 0),
+                'tier_3': results.get('tier_3_count', 0),
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 
 @app.route('/api/sos-lookup', methods=['POST'])
@@ -231,4 +274,4 @@ def get_stats():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5001)
