@@ -6,8 +6,31 @@ Simple Flask app to view investor data and lookup Ohio SOS info
 from flask import Flask, render_template, request, jsonify
 import pandas as pd
 import os
+import json
+from datetime import datetime
 
 app = Flask(__name__)
+
+# Saved contacts file
+SAVED_CONTACTS_FILE = os.path.join(os.path.dirname(__file__), 'data', 'saved_contacts.json')
+
+
+def load_saved_contacts():
+    """Load saved contacts from file"""
+    try:
+        if os.path.exists(SAVED_CONTACTS_FILE):
+            with open(SAVED_CONTACTS_FILE, 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    return []
+
+
+def save_contacts_to_file(contacts):
+    """Save contacts to file"""
+    os.makedirs(os.path.dirname(SAVED_CONTACTS_FILE), exist_ok=True)
+    with open(SAVED_CONTACTS_FILE, 'w') as f:
+        json.dump(contacts, f, indent=2)
 
 # Data directory
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data', 'processed')
@@ -94,20 +117,30 @@ def run_pipeline():
         from data_processing.investor_pipeline import InvestorPipeline
 
         pipeline = InvestorPipeline()
-        results = pipeline.run()
+        df = pipeline.run()
+
+        # Export investors to CSV files
+        pipeline.export_investors(df)
+
+        # Count tiers
+        tier_counts = {'tier_1': 0, 'tier_2': 0, 'tier_3': 0}
+        if 'investor_tier' in df.columns:
+            tier_counts = df['investor_tier'].value_counts().to_dict()
 
         return jsonify({
             'success': True,
             'message': 'Pipeline completed successfully',
             'results': {
-                'total_parcels': results.get('total_parcels', 0),
-                'total_investors': results.get('total_investors', 0),
-                'tier_1': results.get('tier_1_count', 0),
-                'tier_2': results.get('tier_2_count', 0),
-                'tier_3': results.get('tier_3_count', 0),
+                'total_parcels': len(df) if df is not None else 0,
+                'total_investors': len(df) if df is not None else 0,
+                'tier_1': tier_counts.get('tier_1', 0),
+                'tier_2': tier_counts.get('tier_2', 0),
+                'tier_3': tier_counts.get('tier_3', 0),
             }
         })
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)})
 
 
@@ -251,6 +284,61 @@ def full_lookup():
     except Exception as e:
         result['steps'].append(f'Error: {str(e)}')
         return jsonify({'success': False, 'error': str(e), 'data': result})
+
+
+@app.route('/api/saved-contacts')
+def get_saved_contacts():
+    """Get all saved contacts"""
+    contacts = load_saved_contacts()
+    return jsonify({'contacts': contacts, 'count': len(contacts)})
+
+
+@app.route('/api/save-contact', methods=['POST'])
+def save_contact():
+    """Save a contact from lookup results"""
+    data = request.get_json()
+
+    contact = {
+        'id': datetime.now().strftime('%Y%m%d%H%M%S%f'),
+        'saved_at': datetime.now().isoformat(),
+        'llc_name': data.get('llc_name', ''),
+        'entity_number': data.get('entity_number', ''),
+        'status': data.get('status', ''),
+        'agent_name': data.get('agent_name', ''),
+        'agent_address': data.get('agent_address', ''),
+        'phone': data.get('phone', ''),
+        'email': data.get('email', ''),
+        'notes': data.get('notes', ''),
+    }
+
+    contacts = load_saved_contacts()
+    contacts.append(contact)
+    save_contacts_to_file(contacts)
+
+    return jsonify({'success': True, 'contact': contact})
+
+
+@app.route('/api/delete-contact/<contact_id>', methods=['DELETE'])
+def delete_contact(contact_id):
+    """Delete a saved contact"""
+    contacts = load_saved_contacts()
+    contacts = [c for c in contacts if c.get('id') != contact_id]
+    save_contacts_to_file(contacts)
+    return jsonify({'success': True})
+
+
+@app.route('/api/export-contacts')
+def export_contacts():
+    """Export saved contacts as CSV"""
+    contacts = load_saved_contacts()
+    if not contacts:
+        return jsonify({'error': 'No contacts to export'})
+
+    df = pd.DataFrame(contacts)
+    csv_path = os.path.join(DATA_DIR, 'exported_contacts.csv')
+    df.to_csv(csv_path, index=False)
+
+    return jsonify({'success': True, 'path': csv_path, 'count': len(contacts)})
 
 
 @app.route('/api/stats')

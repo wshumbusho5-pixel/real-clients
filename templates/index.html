@@ -58,6 +58,13 @@
         .entity-filter select { padding: 10px 15px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; color: #e2e8f0; font-size: 0.9rem; cursor: pointer; }
         .entity-filter select:focus { outline: none; border-color: #38bdf8; }
 
+        .export-btn { padding: 10px 20px; background: #6366f1; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; }
+        .export-btn:hover { background: #4f46e5; }
+        .save-btn { padding: 8px 16px; background: #22c55e; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; margin-top: 15px; }
+        .save-btn:hover { background: #16a34a; }
+        .delete-btn { padding: 5px 10px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+        .delete-btn:hover { background: #dc2626; }
+
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); justify-content: center; align-items: center; z-index: 1000; }
         .modal.show { display: flex; }
         .modal-content { background: #1e293b; padding: 30px; border-radius: 15px; max-width: 500px; width: 90%; border: 1px solid #334155; }
@@ -145,6 +152,32 @@
                 </tbody>
             </table>
         </div>
+
+        <!-- Saved Contacts Section -->
+        <div style="margin-top: 40px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h2>Saved Contacts</h2>
+                <button class="export-btn" onclick="exportContacts()">Export CSV</button>
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>LLC Name</th>
+                            <th>Agent Name</th>
+                            <th>Agent Address</th>
+                            <th>Phone</th>
+                            <th>Email</th>
+                            <th>Saved</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="saved-contacts-table">
+                        <tr><td colspan="7" class="loading">No saved contacts yet</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
     <div class="modal" id="sos-modal">
@@ -162,6 +195,7 @@
     <script>
         let currentTier = '';
         let currentEntityType = '';
+        let currentLookupData = null;
 
         function formatMoney(value) {
             if (!value) return '$0';
@@ -365,6 +399,8 @@
 
                 if (data.data) {
                     const d = data.data;
+                    currentLookupData = d;  // Store for saving
+
                     let html = `<h3 style="color: #38bdf8; margin-bottom: 15px;">${d.llc_name}</h3>`;
 
                     // Steps log
@@ -395,6 +431,9 @@
                         html += `<p style="color: #f59e0b;">⚠️ ${data.message || 'No contact info found for agent'}</p>`;
                     }
 
+                    // Save button
+                    html += `<button class="save-btn" onclick="saveCurrentContact()">Save Contact</button>`;
+
                     details.innerHTML = html;
                 } else {
                     details.innerHTML = `<p class="error">${data.error || 'Lookup failed'}</p>`;
@@ -419,9 +458,105 @@
             if (e.target.classList.contains('modal')) closeModal();
         });
 
+        // Save current contact
+        async function saveCurrentContact() {
+            if (!currentLookupData) {
+                alert('No data to save');
+                return;
+            }
+
+            const d = currentLookupData;
+            const contact = {
+                llc_name: d.llc_name || '',
+                entity_number: d.sos_data?.entity_number || '',
+                status: d.sos_data?.status || '',
+                agent_name: d.agent_name || '',
+                agent_address: d.agent_address || '',
+                phone: d.phone || '',
+                email: d.email || '',
+            };
+
+            try {
+                const res = await fetch('/api/save-contact', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(contact)
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    alert('Contact saved!');
+                    loadSavedContacts();
+                    closeModal();
+                } else {
+                    alert('Failed to save: ' + data.error);
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        // Load saved contacts
+        async function loadSavedContacts() {
+            const tbody = document.getElementById('saved-contacts-table');
+
+            try {
+                const res = await fetch('/api/saved-contacts');
+                const data = await res.json();
+
+                if (!data.contacts || data.contacts.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="loading">No saved contacts yet</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = data.contacts.map(c => `
+                    <tr>
+                        <td>${c.llc_name || '-'}</td>
+                        <td>${c.agent_name || '-'}</td>
+                        <td>${c.agent_address || '-'}</td>
+                        <td style="color: #22c55e;">${c.phone || '-'}</td>
+                        <td>${c.email || '-'}</td>
+                        <td style="font-size: 0.75rem; color: #94a3b8;">${new Date(c.saved_at).toLocaleDateString()}</td>
+                        <td><button class="delete-btn" onclick="deleteContact('${c.id}')">Delete</button></td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="7" class="error">Error loading contacts</td></tr>`;
+            }
+        }
+
+        // Delete contact
+        async function deleteContact(id) {
+            if (!confirm('Delete this contact?')) return;
+
+            try {
+                await fetch(`/api/delete-contact/${id}`, { method: 'DELETE' });
+                loadSavedContacts();
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        // Export contacts
+        async function exportContacts() {
+            try {
+                const res = await fetch('/api/export-contacts');
+                const data = await res.json();
+
+                if (data.success) {
+                    alert(`Exported ${data.count} contacts to:\n${data.path}`);
+                } else {
+                    alert(data.error || 'Export failed');
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
         // Initial load
         loadStats();
         loadInvestors();
+        loadSavedContacts();
     </script>
 </body>
 </html>
