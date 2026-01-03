@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Investor Finder</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        h1 { font-size: 2rem; margin-bottom: 20px; color: #38bdf8; }
+        h2 { font-size: 1.25rem; margin-bottom: 15px; color: #94a3b8; }
+
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }
+        .stat-card { background: #1e293b; padding: 20px; border-radius: 10px; border: 1px solid #334155; }
+        .stat-value { font-size: 2rem; font-weight: bold; color: #38bdf8; }
+        .stat-label { color: #94a3b8; font-size: 0.875rem; }
+
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab { padding: 10px 20px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; cursor: pointer; color: #94a3b8; }
+        .tab.active { background: #38bdf8; color: #0f172a; border-color: #38bdf8; }
+        .tab:hover { border-color: #38bdf8; }
+
+        .search-box { display: flex; gap: 10px; margin-bottom: 20px; }
+        .search-box input { flex: 1; padding: 12px 15px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; color: #e2e8f0; font-size: 1rem; }
+        .search-box input:focus { outline: none; border-color: #38bdf8; }
+        .search-box button { padding: 12px 25px; background: #38bdf8; color: #0f172a; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; }
+        .search-box button:hover { background: #0ea5e9; }
+
+        .table-container { background: #1e293b; border-radius: 10px; border: 1px solid #334155; overflow: hidden; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #334155; padding: 12px 15px; text-align: left; font-weight: 600; color: #94a3b8; font-size: 0.75rem; text-transform: uppercase; }
+        td { padding: 12px 15px; border-bottom: 1px solid #334155; }
+        tr:hover { background: #334155; }
+
+        .tier-badge { padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        .tier-1 { background: #22c55e; color: #0f172a; }
+        .tier-2 { background: #eab308; color: #0f172a; }
+        .tier-3 { background: #94a3b8; color: #0f172a; }
+
+        .score { font-weight: bold; }
+        .score-high { color: #22c55e; }
+        .score-mid { color: #eab308; }
+        .score-low { color: #94a3b8; }
+
+        .sos-btn { padding: 5px 10px; background: #6366f1; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.75rem; margin-right: 5px; }
+        .sos-btn:hover { background: #4f46e5; }
+        .skip-btn { padding: 5px 10px; background: #22c55e; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+        .skip-btn:hover { background: #16a34a; }
+
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); justify-content: center; align-items: center; z-index: 1000; }
+        .modal.show { display: flex; }
+        .modal-content { background: #1e293b; padding: 30px; border-radius: 15px; max-width: 500px; width: 90%; border: 1px solid #334155; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .modal-close { background: none; border: none; color: #94a3b8; font-size: 1.5rem; cursor: pointer; }
+        .modal-body p { margin-bottom: 10px; }
+        .modal-body strong { color: #38bdf8; }
+
+        .loading { text-align: center; padding: 40px; color: #94a3b8; }
+        .error { background: #ef4444; color: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+
+        .format-money { color: #22c55e; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Investor Finder</h1>
+
+        <div class="stats" id="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="total-investors">-</div>
+                <div class="stat-label">Total Investors</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="tier1-count">-</div>
+                <div class="stat-label">Tier 1 (Prime)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="tier2-count">-</div>
+                <div class="stat-label">Tier 2 (Strong)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="total-properties">-</div>
+                <div class="stat-label">Total Properties</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="total-value">-</div>
+                <div class="stat-label">Total Value</div>
+            </div>
+        </div>
+
+        <h2>Investor Prospects</h2>
+
+        <div class="tabs">
+            <div class="tab active" data-tier="">All Tiers</div>
+            <div class="tab" data-tier="tier_1">Tier 1</div>
+            <div class="tab" data-tier="tier_2">Tier 2</div>
+            <div class="tab" data-tier="tier_3">Tier 3</div>
+        </div>
+
+        <div class="search-box">
+            <input type="text" id="sos-search" placeholder="Enter LLC name for Ohio SOS lookup...">
+            <button onclick="sosLookup()">SOS Lookup</button>
+        </div>
+
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Owner Name</th>
+                        <th>Portfolio</th>
+                        <th>Market Value</th>
+                        <th>Entity Type</th>
+                        <th>Score</th>
+                        <th>Tier</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="investors-table">
+                    <tr><td colspan="7" class="loading">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="modal" id="sos-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Ohio SOS Details</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="sos-details">
+                <p>Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentTier = '';
+
+        function formatMoney(value) {
+            if (!value) return '$0';
+            return '$' + Number(value).toLocaleString('en-US', { maximumFractionDigits: 0 });
+        }
+
+        function getScoreClass(score) {
+            if (score >= 70) return 'score-high';
+            if (score >= 50) return 'score-mid';
+            return 'score-low';
+        }
+
+        async function loadStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+
+                document.getElementById('total-investors').textContent = data.total_investors || 0;
+                document.getElementById('tier1-count').textContent = data.tier_1_count || 0;
+                document.getElementById('tier2-count').textContent = data.tier_2_count || 0;
+                document.getElementById('total-properties').textContent = (data.total_properties || 0).toLocaleString();
+                document.getElementById('total-value').textContent = formatMoney(data.total_value);
+            } catch (e) {
+                console.error('Error loading stats:', e);
+            }
+        }
+
+        async function loadInvestors(tier = '') {
+            const tbody = document.getElementById('investors-table');
+            tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading...</td></tr>';
+
+            try {
+                const url = tier ? `/api/investors?tier=${tier}&limit=100` : '/api/investors?limit=100';
+                const res = await fetch(url);
+                const data = await res.json();
+
+                if (data.error) {
+                    tbody.innerHTML = `<tr><td colspan="7" class="error">${data.error}</td></tr>`;
+                    return;
+                }
+
+                if (!data.investors || data.investors.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="loading">No investors found</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = data.investors.map(inv => `
+                    <tr>
+                        <td>${inv.owner_name || '-'}</td>
+                        <td>${inv.portfolio_size || 0}</td>
+                        <td class="format-money">${formatMoney(inv.total_market_value)}</td>
+                        <td>${inv.entity_type || '-'}</td>
+                        <td class="score ${getScoreClass(inv.investor_score)}">${inv.investor_score || 0}</td>
+                        <td><span class="tier-badge ${inv.investor_tier}">${inv.investor_tier || '-'}</span></td>
+                        <td>
+                            <button class="sos-btn" onclick="sosLookup('${(inv.owner_name || '').replace(/'/g, "\\'")}')">SOS</button>
+                            <button class="skip-btn" onclick="skipTrace('${(inv.owner_name || '').replace(/'/g, "\\'")}', '${(inv.owner_address || '').replace(/'/g, "\\'")}')">Contact</button>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="7" class="error">Error: ${e.message}</td></tr>`;
+            }
+        }
+
+        async function sosLookup(name = null) {
+            const searchName = name || document.getElementById('sos-search').value;
+            if (!searchName) {
+                alert('Please enter a business name');
+                return;
+            }
+
+            const modal = document.getElementById('sos-modal');
+            const details = document.getElementById('sos-details');
+
+            modal.classList.add('show');
+            details.innerHTML = '<p>Looking up on Ohio SOS... (this opens a browser window)</p>';
+
+            try {
+                const res = await fetch('/api/sos-lookup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: searchName })
+                });
+                const data = await res.json();
+
+                if (data.success && data.data) {
+                    const d = data.data;
+                    details.innerHTML = `
+                        <p><strong>Entity Name:</strong> ${d.entity_name || '-'}</p>
+                        <p><strong>Entity #:</strong> ${d.entity_number || '-'}</p>
+                        <p><strong>Type:</strong> ${d.entity_type || '-'}</p>
+                        <p><strong>Status:</strong> ${d.status || '-'}</p>
+                        <p><strong>Formation Date:</strong> ${d.formation_date || '-'}</p>
+                        <p><strong>Agent Name:</strong> ${d.agent_name || '-'}</p>
+                        <p><strong>Agent Address:</strong> ${d.agent_address || '-'}</p>
+                    `;
+                } else {
+                    details.innerHTML = `<p class="error">${data.error || 'Not found'}</p>`;
+                }
+            } catch (e) {
+                details.innerHTML = `<p class="error">Error: ${e.message}</p>`;
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('sos-modal').classList.remove('show');
+        }
+
+        async function skipTrace(name, address = '') {
+            if (!name) {
+                alert('Name required');
+                return;
+            }
+
+            const modal = document.getElementById('sos-modal');
+            const details = document.getElementById('sos-details');
+
+            modal.classList.add('show');
+            details.innerHTML = '<p>Skip tracing... (this may open a browser window)</p>';
+
+            try {
+                const res = await fetch('/api/skip-trace', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, address })
+                });
+                const data = await res.json();
+
+                if (data.success && data.data) {
+                    const d = data.data;
+                    details.innerHTML = `
+                        <p><strong>Name:</strong> ${d.name || '-'}</p>
+                        <p><strong>Phone:</strong> ${d.phone_primary || 'Not found'}</p>
+                        <p><strong>All Phones:</strong> ${(d.phones || []).join(', ') || 'None'}</p>
+                        <p><strong>Email:</strong> ${d.email_primary || 'Not found'}</p>
+                        <p><strong>All Emails:</strong> ${(d.emails || []).join(', ') || 'None'}</p>
+                        <p><strong>Age:</strong> ${d.age || '-'}</p>
+                        <p><strong>Source:</strong> ${d.source || '-'}</p>
+                    `;
+                } else {
+                    details.innerHTML = `<p class="error">${data.error || 'No contact info found'}</p>`;
+                }
+            } catch (e) {
+                details.innerHTML = `<p class="error">Error: ${e.message}</p>`;
+            }
+        }
+
+        // Tab click handlers
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                currentTier = tab.dataset.tier;
+                loadInvestors(currentTier);
+            });
+        });
+
+        // Close modal on background click
+        document.getElementById('sos-modal').addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal')) closeModal();
+        });
+
+        // Initial load
+        loadStats();
+        loadInvestors();
+    </script>
+</body>
+</html>
