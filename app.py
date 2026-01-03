@@ -329,13 +329,14 @@ def delete_contact(contact_id):
 
 @app.route('/api/export-contacts')
 def export_contacts():
-    """Export saved contacts as CSV"""
+    """Export saved contacts as CSV to Downloads folder"""
     contacts = load_saved_contacts()
     if not contacts:
         return jsonify({'error': 'No contacts to export'})
 
     df = pd.DataFrame(contacts)
-    csv_path = os.path.join(DATA_DIR, 'exported_contacts.csv')
+    downloads_folder = os.path.expanduser('~/Downloads')
+    csv_path = os.path.join(downloads_folder, 'investor_contacts.csv')
     df.to_csv(csv_path, index=False)
 
     return jsonify({'success': True, 'path': csv_path, 'count': len(contacts)})
