@@ -282,7 +282,7 @@
                         <td class="score ${getScoreClass(inv.investor_score)}">${inv.investor_score || 0}</td>
                         <td><span class="tier-badge ${inv.investor_tier}">${inv.investor_tier || '-'}</span></td>
                         <td>
-                            <button class="full-btn" onclick="fullLookup('${(inv.owner_name || '').replace(/'/g, "\\'")}')">Get Contact</button>
+                            <button class="full-btn" onclick="fullLookup('${(inv.owner_name || '').replace(/'/g, "\\'")}', '${(inv.owner_address || '').replace(/'/g, "\\'")}', '${inv.entity_type || ''}')">Get Contact</button>
                         </td>
                     </tr>
                 `).join('');
@@ -374,9 +374,9 @@
             }
         }
 
-        async function fullLookup(llcName) {
-            if (!llcName) {
-                alert('LLC name required');
+        async function fullLookup(ownerName, ownerAddress = '', entityType = '') {
+            if (!ownerName) {
+                alert('Name required');
                 return;
             }
 
@@ -384,16 +384,27 @@
             const details = document.getElementById('sos-details');
 
             modal.classList.add('show');
-            details.innerHTML = `
-                <p><strong>Step 1:</strong> Looking up ${llcName} on Ohio SOS...</p>
-                <p style="color: #94a3b8;">(This opens a browser window)</p>
-            `;
+
+            const isIndividual = entityType === 'individual' ||
+                (!entityType && !ownerName.match(/LLC|INC|CORP|TRUST|LP|LTD|COMPANY|PARTNERS/i));
+
+            if (isIndividual) {
+                details.innerHTML = `
+                    <p><strong>Individual detected:</strong> ${ownerName}</p>
+                    <p style="color: #94a3b8;">Skip tracing directly... (this may open a browser)</p>
+                `;
+            } else {
+                details.innerHTML = `
+                    <p><strong>Business detected:</strong> ${ownerName}</p>
+                    <p style="color: #94a3b8;">Looking up on Ohio SOS... (this opens a browser)</p>
+                `;
+            }
 
             try {
                 const res = await fetch('/api/full-lookup', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: llcName })
+                    body: JSON.stringify({ name: ownerName, address: ownerAddress, entity_type: entityType })
                 });
                 const data = await res.json();
 

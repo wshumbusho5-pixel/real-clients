@@ -198,17 +198,21 @@ def skip_trace_lookup():
 @app.route('/api/full-lookup', methods=['POST'])
 def full_lookup():
     """
-    Full lookup chain: LLC → Ohio SOS → Agent Name → Skip Trace
-    Returns complete contact info for an LLC
+    Smart lookup based on entity type:
+    - LLC/Corp/Trust → Ohio SOS → Agent Name → Skip Trace
+    - Individual → Skip Trace directly using name + address
     """
     data = request.get_json()
-    llc_name = data.get('name', '')
+    owner_name = data.get('name', '')
+    owner_address = data.get('address', '')
+    entity_type = data.get('entity_type', '').lower()
 
-    if not llc_name:
-        return jsonify({'error': 'LLC name required'})
+    if not owner_name:
+        return jsonify({'error': 'Name required'})
 
     result = {
-        'llc_name': llc_name,
+        'llc_name': owner_name,
+        'entity_type': entity_type,
         'sos_data': None,
         'agent_name': None,
         'agent_address': None,
@@ -218,54 +222,79 @@ def full_lookup():
         'steps': []
     }
 
+    # Determine if this is a business entity or individual
+    is_business = entity_type in ['llc', 'corporation', 'trust', 'partnership']
+
+    # Also check name patterns if entity_type not provided
+    if not entity_type:
+        business_keywords = ['LLC', 'L.L.C', 'INC', 'CORP', 'TRUST', 'LP', 'LTD', 'COMPANY', 'PARTNERS']
+        is_business = any(kw in owner_name.upper() for kw in business_keywords)
+
     try:
-        # Step 1: Ohio SOS Lookup
-        result['steps'].append('Looking up LLC on Ohio SOS...')
-        from scrapers.ohio_sos import OhioSOSScraper
-        scraper = OhioSOSScraper(headless=False)
-        sos_result = scraper.search_business(llc_name)
+        if is_business:
+            # BUSINESS FLOW: Ohio SOS → Agent → Skip Trace
+            result['steps'].append(f'Detected business entity ({entity_type or "LLC/Corp"})')
+            result['steps'].append('Looking up on Ohio SOS...')
 
-        if not sos_result:
-            result['steps'].append('LLC not found on Ohio SOS')
-            return jsonify({'success': False, 'error': 'LLC not found on Ohio SOS', 'data': result})
+            from scrapers.ohio_sos import OhioSOSScraper
+            scraper = OhioSOSScraper(headless=False)
+            sos_result = scraper.search_business(owner_name)
 
-        result['sos_data'] = sos_result.to_dict()
-        result['agent_name'] = sos_result.agent_name
-        result['agent_address'] = sos_result.agent_address
-        result['steps'].append(f'Found agent: {sos_result.agent_name}')
+            if not sos_result:
+                result['steps'].append('Not found on Ohio SOS')
+                return jsonify({'success': False, 'error': 'Business not found on Ohio SOS', 'data': result})
 
-        if not sos_result.agent_name:
-            result['steps'].append('No agent name found')
-            return jsonify({'success': True, 'data': result, 'message': 'Found LLC but no agent name'})
+            result['sos_data'] = sos_result.to_dict()
+            result['agent_name'] = sos_result.agent_name
+            result['agent_address'] = sos_result.agent_address
+            result['steps'].append(f'Found agent: {sos_result.agent_name}')
 
-        # Check if agent is a person (not a service company)
-        service_companies = ['NATIONAL REGISTERED AGENTS', 'CT CORPORATION', 'CSC',
-                           'REGISTERED AGENT SOLUTIONS', 'INCORP SERVICES', 'NORTHWEST REGISTERED']
-        is_service = any(svc in sos_result.agent_name.upper() for svc in service_companies)
+            if not sos_result.agent_name:
+                result['steps'].append('No agent name found')
+                return jsonify({'success': True, 'data': result, 'message': 'Found business but no agent name'})
 
-        if is_service:
-            result['steps'].append(f'Agent is a registered agent service - skip tracing not useful')
-            return jsonify({
-                'success': True,
-                'data': result,
-                'message': 'Agent is a service company, not a person'
-            })
+            # Check if agent is a service company
+            service_companies = ['NATIONAL REGISTERED AGENTS', 'CT CORPORATION', 'CSC',
+                               'REGISTERED AGENT SOLUTIONS', 'INCORP SERVICES', 'NORTHWEST REGISTERED',
+                               'COGENCY GLOBAL', 'LEGALINC', 'HARVARD BUSINESS']
+            is_service = any(svc in sos_result.agent_name.upper() for svc in service_companies)
 
-        # Step 2: Skip Trace the Agent
-        result['steps'].append(f'Skip tracing agent: {sos_result.agent_name}')
+            if is_service:
+                result['steps'].append('Agent is a registered agent service - skip tracing not useful')
+                return jsonify({
+                    'success': True,
+                    'data': result,
+                    'message': 'Agent is a service company, not a person'
+                })
+
+            # Skip Trace the Agent
+            result['steps'].append(f'Skip tracing agent: {sos_result.agent_name}')
+            skip_name = sos_result.agent_name
+            skip_address = sos_result.agent_address
+
+        else:
+            # INDIVIDUAL FLOW: Skip Trace directly
+            result['steps'].append('Detected individual owner')
+            result['steps'].append(f'Skip tracing: {owner_name}')
+            skip_name = owner_name
+            skip_address = owner_address
+            result['agent_name'] = owner_name
+            result['agent_address'] = owner_address
+
+        # Perform Skip Trace
         from scrapers.skip_tracing import SkipTracer
         tracer = SkipTracer(provider="free")
 
-        # Parse city/state from agent address
+        # Parse city/state from address
         city, state = "", "OH"
-        if sos_result.agent_address:
+        if skip_address:
             import re
-            addr_match = re.search(r'([A-Za-z\s]+)\s+([A-Z]{2})\s*\d*', sos_result.agent_address)
+            addr_match = re.search(r'([A-Za-z\s]+)\s+([A-Z]{2})\s*\d*', skip_address)
             if addr_match:
                 city = addr_match.group(1).strip()
                 state = addr_match.group(2)
 
-        contact = tracer.lookup(sos_result.agent_name, sos_result.agent_address, city, state)
+        contact = tracer.lookup(skip_name, skip_address, city, state)
 
         if contact and contact.has_contact():
             result['contact_data'] = contact.to_dict()
@@ -274,11 +303,11 @@ def full_lookup():
             result['steps'].append(f'Found contact: {contact.phone_primary or contact.email_primary}')
             return jsonify({'success': True, 'data': result})
         else:
-            result['steps'].append('No contact info found for agent')
+            result['steps'].append('No contact info found')
             return jsonify({
                 'success': True,
                 'data': result,
-                'message': 'Found agent but no contact info'
+                'message': 'Could not find contact info'
             })
 
     except Exception as e:
