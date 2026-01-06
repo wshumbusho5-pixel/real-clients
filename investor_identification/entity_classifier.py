@@ -74,10 +74,11 @@ class EntityClassifier:
         name = str(owner_name).upper().strip()
 
         # Check each entity type in priority order
-        # (government first since "CITY OF COLUMBUS" should not match "CO.")
+        # (government/institution first since "CITY OF COLUMBUS" should not match "CO.")
+        # business is last - catch-all for names with investor keywords but no entity suffix
         priority_order = [
-            'government', 'nonprofit', 'estate', 'trust',
-            'partnership', 'corporation', 'llc'
+            'government', 'institution', 'nonprofit', 'estate', 'trust',
+            'partnership', 'corporation', 'llc', 'business'
         ]
 
         for entity_type in priority_order:
@@ -90,10 +91,10 @@ class EntityClassifier:
         """
         Determine if an entity type is likely an investor.
 
-        LLCs, corporations, partnerships, and some trusts are likely investors.
-        Individuals, nonprofits, and government are not.
+        LLCs, corporations, partnerships, trusts, and businesses are likely investors.
+        Individuals, nonprofits, institutions, and government are not.
         """
-        investor_types = {'llc', 'corporation', 'partnership', 'trust'}
+        investor_types = {'llc', 'corporation', 'partnership', 'trust', 'business'}
         return entity_type in investor_types
 
     def has_investor_name(self, owner_name: str) -> bool:

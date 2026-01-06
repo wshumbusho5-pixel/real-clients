@@ -1,6 +1,7 @@
 """
 Investor Finder - Web Interface
 Simple Flask app to view investor data and lookup Ohio SOS info
+Supports multiple counties: Franklin (Columbus), Hamilton (Cincinnati)
 """
 
 from flask import Flask, render_template, request, jsonify
@@ -8,6 +9,7 @@ import pandas as pd
 import os
 import json
 from datetime import datetime
+from config.settings import COUNTY_CONFIG, DEFAULT_COUNTY
 
 app = Flask(__name__)
 
@@ -36,11 +38,23 @@ def save_contacts_to_file(contacts):
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data', 'processed')
 
 
-def load_investors(tier=None):
-    """Load investor data from CSV files"""
+def load_investors(tier=None, county=None):
+    """Load investor data from CSV files for a specific county"""
     investors = []
 
+    # Default to configured default county, or try to load from any available
+    if county is None:
+        county = DEFAULT_COUNTY
+
+    # County-specific file pattern
     files = {
+        'tier_1': f'investor_prospects_{county}_tier_1.csv',
+        'tier_2': f'investor_prospects_{county}_tier_2.csv',
+        'tier_3': f'investor_prospects_{county}_tier_3.csv',
+    }
+
+    # Also check legacy filenames (without county prefix) for backward compatibility
+    legacy_files = {
         'tier_1': 'investor_prospects_tier_1.csv',
         'tier_2': 'investor_prospects_tier_2.csv',
         'tier_3': 'investor_prospects_tier_3.csv',
@@ -48,9 +62,13 @@ def load_investors(tier=None):
 
     if tier and tier in files:
         files = {tier: files[tier]}
+        legacy_files = {tier: legacy_files[tier]}
 
     for tier_name, filename in files.items():
         filepath = os.path.join(DATA_DIR, filename)
+        # Try county-specific file first, then legacy
+        if not os.path.exists(filepath):
+            filepath = os.path.join(DATA_DIR, legacy_files[tier_name])
         if os.path.exists(filepath):
             df = pd.read_csv(filepath)
             df['tier'] = tier_name
@@ -70,14 +88,32 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/api/counties')
+def get_counties():
+    """Get list of available counties"""
+    counties = []
+    for key, config in COUNTY_CONFIG.items():
+        counties.append({
+            'id': key,
+            'name': config['name'],
+            'city': config['city'],
+            'state': config['state'],
+        })
+    return jsonify({
+        'counties': counties,
+        'default': DEFAULT_COUNTY
+    })
+
+
 @app.route('/api/investors')
 def get_investors():
     """API endpoint for investor data"""
     tier = request.args.get('tier', None)
     entity_type = request.args.get('entity_type', None)
+    county = request.args.get('county', DEFAULT_COUNTY)
     limit = int(request.args.get('limit', 100))
 
-    df = load_investors(tier)
+    df = load_investors(tier, county)
 
     if df.empty:
         return jsonify({'error': 'No data found. Run the pipeline first.', 'investors': []})
@@ -102,7 +138,8 @@ def get_investors():
 @app.route('/api/entity-types')
 def get_entity_types():
     """Get list of unique entity types"""
-    df = load_investors()
+    county = request.args.get('county', DEFAULT_COUNTY)
+    df = load_investors(county=county)
     if df.empty or 'entity_type' not in df.columns:
         return jsonify({'types': []})
 
@@ -112,11 +149,19 @@ def get_entity_types():
 
 @app.route('/api/run-pipeline', methods=['POST'])
 def run_pipeline():
-    """Run the investor identification pipeline"""
+    """Run the investor identification pipeline for a specific county"""
     try:
         from data_processing.investor_pipeline import InvestorPipeline
 
-        pipeline = InvestorPipeline()
+        data = request.get_json() or {}
+        county = data.get('county', DEFAULT_COUNTY)
+
+        # Validate county
+        if county not in COUNTY_CONFIG:
+            return jsonify({'success': False, 'error': f'Unknown county: {county}'})
+
+        county_config = COUNTY_CONFIG[county]
+        pipeline = InvestorPipeline(county=county)
         df = pipeline.run()
 
         # Export investors to CSV files
@@ -129,7 +174,9 @@ def run_pipeline():
 
         return jsonify({
             'success': True,
-            'message': 'Pipeline completed successfully',
+            'message': f'Pipeline completed for {county_config["city"]}',
+            'county': county,
+            'city': county_config['city'],
             'results': {
                 'total_parcels': len(df) if df is not None else 0,
                 'total_investors': len(df) if df is not None else 0,
@@ -138,6 +185,85 @@ def run_pipeline():
                 'tier_3': tier_counts.get('tier_3', 0),
             }
         })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/scrape-hamilton', methods=['POST'])
+def scrape_hamilton():
+    """Scrape Hamilton County property data"""
+    try:
+        from scrapers.hamilton_county import HamiltonCountyScraper
+
+        data = request.get_json() or {}
+        test_only = data.get('test', False)
+
+        scraper = HamiltonCountyScraper(headless=False)
+
+        if test_only:
+            # Test with single 2-letter pattern
+            scraper._init_browser()
+            try:
+                parcels = scraper.search_by_letter('SM')  # Test with "SM" pattern
+                return jsonify({
+                    'success': True,
+                    'message': f'Found {len(parcels)} parcels for pattern "SM"',
+                    'count': len(parcels),
+                    'sample': parcels[:10]
+                })
+            finally:
+                scraper._close_browser()
+        else:
+            # Full scrape (all patterns AA-ZZ + 00-09)
+            path = scraper.scrape_and_save()
+            return jsonify({
+                'success': True,
+                'message': 'Hamilton County scrape completed',
+                'file': path
+            })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/enrich-hamilton-investors', methods=['POST'])
+def enrich_hamilton_investors():
+    """
+    Smart enrichment: Run pipeline to identify investors,
+    then enrich only their parcels (not all 300K).
+    """
+    try:
+        from scrapers.hamilton_county import HamiltonCountyScraper
+        from data_processing.investor_pipeline import InvestorPipeline
+
+        # Step 1: Run pipeline to identify investors
+        pipeline = InvestorPipeline(county='hamilton')
+        investors = pipeline.run(min_portfolio_size=2, min_score=40)
+
+        if investors.empty:
+            return jsonify({
+                'success': False,
+                'error': 'No investors identified. Run basic scrape first.'
+            })
+
+        investor_names = investors['owner_name'].tolist()
+
+        # Step 2: Enrich only investor parcels
+        scraper = HamiltonCountyScraper(headless=False)
+        enriched = scraper.enrich_investor_parcels(investor_names)
+
+        return jsonify({
+            'success': True,
+            'message': 'Enrichment completed',
+            'investors_found': len(investors),
+            'parcels_enriched': len(enriched),
+            'file': 'data/raw/Hamilton_Investor_Parcels_Enriched.xlsx'
+        })
+
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -378,8 +504,9 @@ def export_for_skip_tracing():
 
     tier = request.args.get('tier', None)
     entity_type = request.args.get('entity_type', None)
+    county = request.args.get('county', DEFAULT_COUNTY)
 
-    df = load_investors(tier)
+    df = load_investors(tier, county)
 
     if df.empty:
         return jsonify({'error': 'No data to export'})
@@ -450,13 +577,17 @@ def export_for_skip_tracing():
 
 @app.route('/api/stats')
 def get_stats():
-    """Get summary statistics"""
-    df = load_investors()
+    """Get summary statistics for a county"""
+    county = request.args.get('county', DEFAULT_COUNTY)
+    df = load_investors(county=county)
 
     if df.empty:
         return jsonify({'error': 'No data found'})
 
+    county_config = COUNTY_CONFIG.get(county, {})
     stats = {
+        'county': county,
+        'city': county_config.get('city', ''),
         'total_investors': len(df),
         'tier_1_count': len(df[df['investor_tier'] == 'tier_1']) if 'investor_tier' in df.columns else 0,
         'tier_2_count': len(df[df['investor_tier'] == 'tier_2']) if 'investor_tier' in df.columns else 0,

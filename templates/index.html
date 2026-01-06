@@ -83,7 +83,16 @@
 </head>
 <body>
     <div class="container">
-        <h1>Investor Finder</h1>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h1>Investor Finder</h1>
+            <div class="county-selector" style="display: flex; align-items: center; gap: 10px;">
+                <label style="color: #94a3b8;">County:</label>
+                <select id="county-select" onchange="switchCounty()" style="padding: 10px 15px; background: #1e293b; border: 1px solid #38bdf8; border-radius: 8px; color: #38bdf8; font-size: 1rem; cursor: pointer; font-weight: 600;">
+                    <option value="franklin">Franklin (Columbus)</option>
+                    <option value="hamilton">Hamilton (Cincinnati)</option>
+                </select>
+            </div>
+        </div>
 
         <div class="stats" id="stats">
             <div class="stat-card">
@@ -112,6 +121,8 @@
             <h2>Investor Prospects</h2>
             <div style="display: flex; gap: 10px;">
                 <button class="export-skip-btn" onclick="exportForSkipTracing()">Export for Skip Tracing</button>
+                <button id="scrape-btn" class="run-btn" style="background: #f59e0b; display: none;" onclick="scrapeHamilton()">Scrape Hamilton Data</button>
+                <button id="enrich-btn" class="run-btn" style="background: #8b5cf6; display: none;" onclick="enrichHamiltonInvestors()">Enrich Investors</button>
                 <button class="run-btn" onclick="runPipeline()">Pull New Batch</button>
             </div>
         </div>
@@ -200,6 +211,7 @@
     <script>
         let currentTier = '';
         let currentEntityType = '';
+        let currentCounty = 'franklin';
         let currentLookupData = null;
 
         function formatMoney(value) {
@@ -213,9 +225,109 @@
             return 'score-low';
         }
 
+        function switchCounty() {
+            currentCounty = document.getElementById('county-select').value;
+            loadStats();
+            loadInvestors(currentTier, currentEntityType);
+
+            // Show scrape/enrich buttons for Hamilton (no pre-existing data)
+            const scrapeBtn = document.getElementById('scrape-btn');
+            const enrichBtn = document.getElementById('enrich-btn');
+            if (currentCounty === 'hamilton') {
+                scrapeBtn.style.display = 'inline-block';
+                enrichBtn.style.display = 'inline-block';
+            } else {
+                scrapeBtn.style.display = 'none';
+                enrichBtn.style.display = 'none';
+            }
+        }
+
+        async function scrapeHamilton() {
+            const btn = document.getElementById('scrape-btn');
+            btn.disabled = true;
+            btn.textContent = 'Scraping... (this takes a while)';
+
+            // First test with one pattern
+            const testFirst = confirm('This will scrape Hamilton County property data.\\n\\nDo you want to TEST first (recommended)?\\n\\nTest searches for owners starting with "SM" (Smith, etc.)');
+
+            try {
+                const body = testFirst ? { test: true } : {};
+
+                const res = await fetch('/api/scrape-hamilton', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    if (testFirst) {
+                        alert(`Test successful!\\n\\nFound ${data.count} parcels for pattern "SM".\\n\\nSample:\\n${data.sample?.slice(0,3).map(p => p.owner_name).join('\\n') || 'No data'}`);
+                    } else {
+                        alert(`Scrape completed!\\n\\nFile saved to: ${data.file}\\n\\nNow click "Pull New Batch" to process the data.`);
+                        loadStats();
+                        loadInvestors(currentTier, currentEntityType);
+                    }
+                } else {
+                    alert('Scrape failed: ' + data.error);
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Scrape Hamilton Data';
+            }
+        }
+
+        async function enrichHamiltonInvestors() {
+            const btn = document.getElementById('enrich-btn');
+
+            const proceed = confirm(
+                'SMART ENRICHMENT\n\n' +
+                'This will:\n' +
+                '1. Run pipeline to identify investors\n' +
+                '2. Enrich ONLY investor parcels (not all 300K)\n' +
+                '3. Get market values, owner addresses, etc.\n\n' +
+                'Make sure you\'ve run the basic scrape first!\n\n' +
+                'This may take 1-3 hours depending on investor count.\n\n' +
+                'Continue?'
+            );
+
+            if (!proceed) return;
+
+            btn.disabled = true;
+            btn.textContent = 'Enriching... (this takes a while)';
+
+            try {
+                const res = await fetch('/api/enrich-hamilton-investors', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    alert(
+                        `Enrichment completed!\n\n` +
+                        `Investors found: ${data.investors_found}\n` +
+                        `Parcels enriched: ${data.parcels_enriched}\n\n` +
+                        `File saved to: ${data.file}`
+                    );
+                    loadStats();
+                    loadInvestors(currentTier, currentEntityType);
+                } else {
+                    alert('Enrichment failed: ' + data.error);
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Enrich Investors';
+            }
+        }
+
         async function loadStats() {
             try {
-                const res = await fetch('/api/stats');
+                const res = await fetch(`/api/stats?county=${currentCounty}`);
                 const data = await res.json();
 
                 document.getElementById('total-investors').textContent = data.total_investors || 0;
@@ -235,15 +347,20 @@
 
         async function runPipeline() {
             const btn = document.querySelector('.run-btn');
+            const countyName = document.getElementById('county-select').options[document.getElementById('county-select').selectedIndex].text;
             btn.disabled = true;
-            btn.textContent = 'Running...';
+            btn.textContent = `Running for ${countyName}...`;
 
             try {
-                const res = await fetch('/api/run-pipeline', { method: 'POST' });
+                const res = await fetch('/api/run-pipeline', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ county: currentCounty })
+                });
                 const data = await res.json();
 
                 if (data.success) {
-                    alert(`Pipeline completed!\n\nTotal Parcels: ${data.results.total_parcels}\nInvestors Found: ${data.results.total_investors}\nTier 1: ${data.results.tier_1}\nTier 2: ${data.results.tier_2}\nTier 3: ${data.results.tier_3}`);
+                    alert(`Pipeline completed for ${data.city}!\n\nTotal Parcels: ${data.results.total_parcels}\nInvestors Found: ${data.results.total_investors}\nTier 1: ${data.results.tier_1}\nTier 2: ${data.results.tier_2}\nTier 3: ${data.results.tier_3}`);
                     loadStats();
                     loadInvestors(currentTier, currentEntityType);
                 } else {
@@ -262,7 +379,7 @@
             tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading...</td></tr>';
 
             try {
-                let url = '/api/investors?limit=100';
+                let url = `/api/investors?limit=100&county=${currentCounty}`;
                 if (tier) url += `&tier=${tier}`;
                 if (entityType) url += `&entity_type=${entityType}`;
                 const res = await fetch(url);
@@ -572,17 +689,16 @@
         // Export for skip tracing
         async function exportForSkipTracing() {
             try {
-                let url = '/api/export-for-skip-tracing';
-                const params = [];
-                if (currentTier) params.push(`tier=${currentTier}`);
-                if (currentEntityType) params.push(`entity_type=${currentEntityType}`);
-                if (params.length) url += '?' + params.join('&');
+                let url = `/api/export-for-skip-tracing?county=${currentCounty}`;
+                if (currentTier) url += `&tier=${currentTier}`;
+                if (currentEntityType) url += `&entity_type=${currentEntityType}`;
 
                 const res = await fetch(url);
                 const data = await res.json();
 
                 if (data.success) {
-                    alert(`Exported ${data.count} investors for skip tracing!\n\nFile: ${data.path}\n\nColumns: full_name, first_name, last_name, address, city, state, zip`);
+                    const countyName = document.getElementById('county-select').options[document.getElementById('county-select').selectedIndex].text;
+                    alert(`Exported ${data.count} ${countyName} investors for skip tracing!\n\nFile: ${data.path}\n\nColumns: full_name, first_name, last_name, address, city, state, zip`);
                 } else {
                     alert(data.error || 'Export failed');
                 }

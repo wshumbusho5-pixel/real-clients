@@ -53,12 +53,27 @@ PROXY_URL = os.getenv('PROXY_URL', '')
 # ========================================
 ENTITY_KEYWORDS = {
     'llc': ['LLC', 'L.L.C.', 'LIMITED LIABILITY'],
-    'corporation': ['INC', 'INCORPORATED', 'CORP', 'CORPORATION'],
-    'trust': ['TRUST', 'TRUSTEE', 'TTEE', 'LIVING TRUST', 'REVOCABLE TRUST'],
+    'corporation': ['INC', 'INCORPORATED', 'CORP', 'CORPORATION', 'COMPANY', 'CO.', ' CO', 'LABORATORIES'],
+    'trust': ['TRUST', 'TRUSTEE', 'TTEE', ' TR', 'LIVING TRUST', 'REVOCABLE TRUST'],
     'estate': ['ESTATE OF', 'EXECUTOR', 'EXECUTRIX', 'CONSERVATOR', 'ADMINISTRATOR'],
-    'partnership': ['LP', 'LLP', 'PLLC', 'PARTNERSHIP', 'PARTNERS'],
-    'nonprofit': ['CHURCH', 'NONPROFIT', 'FOUNDATION', 'CHARITY', 'ASSOCIATION', 'MINISTRY'],
-    'government': ['CITY OF', 'COUNTY OF', 'STATE OF', 'SCHOOL', 'BOARD OF', 'HOUSING AUTHORITY'],
+    'partnership': ['LP', 'L P', 'LLP', 'L L P', 'PLLC', 'PARTNERSHIP', 'PARTNERS', 'LTD', 'LLLP'],
+    'nonprofit': ['CHURCH', 'NONPROFIT', 'FOUNDATION', 'CHARITY', 'ASSOCIATION', 'MINISTRY', 'CHRISTIAN CENTER', 'TEMPLE', 'MOSQUE', 'SYNAGOGUE'],
+    'government': ['CITY OF', 'COUNTY OF', 'STATE OF', 'BOARD OF', 'HOUSING AUTHORITY', 'TRANSIT AUTHORITY', 'AUTHORITY', 'COMMISSIONERS', 'COUNTY COMM', 'TOWNSHIP'],
+    'institution': [
+        'HOSPITAL', 'MEDICAL CENTER', 'HEALTH SYSTEM', 'HEALTH',
+        'UNIVERSITY', 'COLLEGE', 'INSTITUTE', 'ACADEMY', 'SCHOOL',
+        'BANK', 'CREDIT UNION', 'SAVINGS',
+        'ELECTRIC', 'GAS', 'WATER', 'UTILITY', 'POWER',
+        'RAILROAD', 'RAILWAY',
+        'INSURANCE',
+    ],
+    'business': [
+        'PROPERTIES', 'PROPERTY', 'HOLDINGS', 'HOLDING',
+        'INVESTMENTS', 'INVESTMENT', 'CAPITAL', 'VENTURES',
+        'ENTERPRISES', 'MANAGEMENT', 'DEVELOPMENT', 'DEVELOPERS',
+        'REALTY', 'REAL ESTATE', 'RENTALS', 'RENTAL',
+        'ACQUISITIONS', 'ASSOCIATES', 'GROUP', 'BROTHERS',
+    ],
 }
 
 # Investor name patterns (high confidence)
@@ -140,15 +155,56 @@ MIN_PORTFOLIO_SIZE = 2
 # Maximum results to process in one session
 MAX_PROCESS_RESULTS = 500000  # Process all ~486K records
 
-# Columbus zip codes
-COLUMBUS_ZIP_CODES = [
-    '43201', '43202', '43203', '43204', '43205',
-    '43206', '43207', '43209', '43210', '43211',
-    '43212', '43213', '43214', '43215', '43219',
-    '43220', '43221', '43222', '43223', '43224',
-    '43227', '43229', '43230', '43231', '43232',
-    '43235', '43240'
-]
+# County configurations
+COUNTY_CONFIG = {
+    'franklin': {
+        'name': 'Franklin County',
+        'city': 'Columbus',
+        'state': 'OH',
+        'auditor_url': 'https://property.franklincountyauditor.com/',
+        'data_files': {
+            'parcel': 'Parcel.xlsx',
+            'value': 'Value.xlsx',
+        },
+        'zip_codes': [
+            '43201', '43202', '43203', '43204', '43205',
+            '43206', '43207', '43209', '43210', '43211',
+            '43212', '43213', '43214', '43215', '43219',
+            '43220', '43221', '43222', '43223', '43224',
+            '43227', '43229', '43230', '43231', '43232',
+            '43235', '43240'
+        ],
+    },
+    'hamilton': {
+        'name': 'Hamilton County',
+        'city': 'Cincinnati',
+        'state': 'OH',
+        'auditor_url': 'https://www.hamiltoncountyauditor.org/',
+        'data_files': {
+            'parcel': 'Hamilton_Parcel.xlsx',
+            'value': 'Hamilton_Value.xlsx',
+        },
+        'zip_codes': [
+            '45201', '45202', '45203', '45204', '45205',
+            '45206', '45207', '45208', '45209', '45210',
+            '45211', '45212', '45213', '45214', '45215',
+            '45216', '45217', '45218', '45219', '45220',
+            '45221', '45222', '45223', '45224', '45225',
+            '45226', '45227', '45228', '45229', '45230',
+            '45231', '45232', '45233', '45234', '45235',
+            '45236', '45237', '45238', '45239', '45240',
+            '45241', '45242', '45243', '45244', '45245',
+            '45246', '45247', '45248', '45249', '45250',
+            '45251', '45252', '45253', '45254', '45255',
+        ],
+    },
+}
+
+# Default county
+DEFAULT_COUNTY = 'franklin'
+
+# Legacy support - Columbus zip codes (for backward compatibility)
+COLUMBUS_ZIP_CODES = COUNTY_CONFIG['franklin']['zip_codes']
 
 # ========================================
 # Environment

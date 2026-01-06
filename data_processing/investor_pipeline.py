@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict
 
-from config.settings import RAW_DATA_DIR, PROCESSED_DATA_DIR, COLUMBUS_ZIP_CODES
+from config.settings import RAW_DATA_DIR, PROCESSED_DATA_DIR, COUNTY_CONFIG, DEFAULT_COUNTY
 from config.logging_config import get_logger, log_success, log_failure
 from scrapers.franklin_county_excel import FranklinCountyExcelLoader
 from investor_identification import EntityClassifier, PortfolioDetector, InvestorScorer
@@ -25,14 +25,23 @@ class InvestorPipeline:
     Main pipeline for identifying real estate investors from property records.
 
     Usage:
-        pipeline = InvestorPipeline()
+        pipeline = InvestorPipeline(county='franklin')  # Columbus
+        pipeline = InvestorPipeline(county='hamilton')  # Cincinnati
         investors = pipeline.run()
         pipeline.export_investors(investors)
     """
 
-    def __init__(self, data_dir: Path = RAW_DATA_DIR):
+    def __init__(self, data_dir: Path = RAW_DATA_DIR, county: str = DEFAULT_COUNTY):
         self.logger = get_logger(self.__class__.__name__)
         self.data_dir = data_dir
+        self.county = county.lower()
+
+        # Validate county
+        if self.county not in COUNTY_CONFIG:
+            raise ValueError(f"Unknown county: {county}. Available: {list(COUNTY_CONFIG.keys())}")
+
+        self.county_config = COUNTY_CONFIG[self.county]
+        self.logger.info(f"Initialized pipeline for {self.county_config['name']} ({self.county_config['city']})")
 
         # Initialize components
         self.loader = FranklinCountyExcelLoader(data_dir)
@@ -41,7 +50,7 @@ class InvestorPipeline:
         self.scorer = InvestorScorer()
 
     def run(self,
-            columbus_only: bool = True,
+            filter_city: bool = True,
             min_portfolio_size: int = 2,
             min_score: int = 40,
             max_results: Optional[int] = None) -> pd.DataFrame:
@@ -49,7 +58,7 @@ class InvestorPipeline:
         Run the full investor identification pipeline.
 
         Args:
-            columbus_only: Filter to Columbus zip codes only
+            filter_city: Filter to city zip codes only (based on county config)
             min_portfolio_size: Minimum properties to be considered portfolio investor
             min_score: Minimum investor score to include in results
             max_results: Maximum investors to return (None = all)
@@ -58,12 +67,12 @@ class InvestorPipeline:
             DataFrame of identified investors with scores
         """
         self.logger.info("=" * 60)
-        self.logger.info("INVESTOR FINDER PIPELINE")
+        self.logger.info(f"INVESTOR FINDER PIPELINE - {self.county_config['city'].upper()}")
         self.logger.info("=" * 60)
 
         # Step 1: Load all property data
         self.logger.info("\n[Step 1/5] Loading property data...")
-        df = self._load_all_properties(columbus_only)
+        df = self._load_all_properties(filter_city)
 
         if df.empty:
             log_failure("No property data loaded")
@@ -107,39 +116,57 @@ class InvestorPipeline:
 
         return investors_df
 
-    def _load_all_properties(self, columbus_only: bool = True) -> pd.DataFrame:
+    def _load_all_properties(self, filter_city: bool = True) -> pd.DataFrame:
         """
         Load all properties (not just tax delinquent).
 
         We want to identify ALL investors, not just those with distressed properties.
         """
-        self.logger.info("Loading property data from Excel files...")
+        self.logger.info(f"Loading property data for {self.county_config['name']}...")
 
         try:
-            # Load parcel data (all properties)
-            parcel_file = self.data_dir / 'Parcel.xlsx'
+            # Load parcel data (all properties) - use county-specific file
+            parcel_filename = self.county_config['data_files']['parcel']
+            parcel_file = self.data_dir / parcel_filename
             if not parcel_file.exists():
-                log_failure(f"Parcel.xlsx not found at {parcel_file}")
+                log_failure(f"{parcel_filename} not found at {parcel_file}")
                 return pd.DataFrame()
 
             df = pd.read_excel(parcel_file, engine='openpyxl')
-            self.logger.info(f"Loaded {len(df):,} parcels from Parcel.xlsx")
+            self.logger.info(f"Loaded {len(df):,} parcels from {parcel_filename}")
 
-            # Select and rename columns
+            # Select and rename columns (flexible mapping for different county formats)
             columns_to_keep = {
                 'PARCEL ID': 'parcel_id',
+                'Parcel ID': 'parcel_id',
+                'ParcelID': 'parcel_id',
                 'SiteAddress': 'address',
+                'Site Address': 'address',
+                'PropertyAddress': 'address',
                 'OwnerName1': 'owner_name',
+                'Owner Name': 'owner_name',
+                'OwnerName': 'owner_name',
                 'OwnerName2': 'owner_name_2',
                 'OwnerAddress1': 'owner_address',
+                'Owner Address': 'owner_address',
                 'TaxpayerAddress1': 'mailing_address',
+                'Mailing Address': 'mailing_address',
                 'ZipCode': 'zip_code',
+                'Zip': 'zip_code',
+                'ZIP': 'zip_code',
                 'LUCDesc': 'property_type',
+                'Property Type': 'property_type',
                 'Neighborhood': 'neighborhood',
             }
 
-            # Keep only columns that exist
-            available_cols = {k: v for k, v in columns_to_keep.items() if k in df.columns}
+            # Keep only columns that exist (first match wins)
+            available_cols = {}
+            used_targets = set()
+            for source, target in columns_to_keep.items():
+                if source in df.columns and target not in used_targets:
+                    available_cols[source] = target
+                    used_targets.add(target)
+
             df = df[list(available_cols.keys())].copy()
             df.columns = [available_cols[c] for c in df.columns]
 
@@ -148,28 +175,43 @@ class InvestorPipeline:
                 df['zip_code'] = df['zip_code'].fillna(0).astype(int).astype(str)
                 df['zip_code'] = df['zip_code'].replace('0', '')
 
-            # Filter to Columbus if requested
-            if columbus_only and 'zip_code' in df.columns:
-                df = df[df['zip_code'].isin(COLUMBUS_ZIP_CODES)]
-                self.logger.info(f"Filtered to Columbus: {len(df):,} properties")
+            # Filter to city zip codes if requested
+            if filter_city and 'zip_code' in df.columns:
+                city_zips = self.county_config['zip_codes']
+                df = df[df['zip_code'].isin(city_zips)]
+                self.logger.info(f"Filtered to {self.county_config['city']}: {len(df):,} properties")
 
-            # Load value data for market values
-            value_file = self.data_dir / 'Value.xlsx'
+            # Load value data for market values - use county-specific file
+            value_filename = self.county_config['data_files']['value']
+            value_file = self.data_dir / value_filename
             if value_file.exists():
                 df_value = pd.read_excel(value_file, engine='openpyxl')
-                df_value['market_value'] = df_value['MarketLand'].fillna(0) + df_value['MarketImpr'].fillna(0)
-                df_value = df_value[['Parcel Id', 'market_value']].copy()
-                df_value.columns = ['parcel_id', 'market_value']
-                df_value = df_value.drop_duplicates(subset=['parcel_id'], keep='last')
+                # Flexible column mapping for value file
+                value_cols = df_value.columns.tolist()
+                parcel_col = next((c for c in value_cols if 'parcel' in c.lower()), None)
+                land_col = next((c for c in value_cols if 'land' in c.lower() and 'market' in c.lower()), None)
+                impr_col = next((c for c in value_cols if 'impr' in c.lower() and 'market' in c.lower()), None)
 
-                df = df.merge(df_value, on='parcel_id', how='left')
-                df['market_value'] = df['market_value'].fillna(0)
-                self.logger.info("Added market values")
+                if parcel_col and (land_col or impr_col):
+                    land_val = df_value[land_col].fillna(0) if land_col else 0
+                    impr_val = df_value[impr_col].fillna(0) if impr_col else 0
+                    df_value['market_value'] = land_val + impr_val
+                    df_value = df_value[[parcel_col, 'market_value']].copy()
+                    df_value.columns = ['parcel_id', 'market_value']
+                    df_value = df_value.drop_duplicates(subset=['parcel_id'], keep='last')
+
+                    df = df.merge(df_value, on='parcel_id', how='left')
+                    df['market_value'] = df['market_value'].fillna(0)
+                    self.logger.info("Added market values")
 
             # Calculate absentee status
             if 'mailing_address' in df.columns and 'owner_address' in df.columns:
                 df['is_absentee'] = df['mailing_address'] != df['owner_address']
                 df['is_absentee'] = df['is_absentee'].fillna(False)
+
+            # Add county info to dataframe
+            df['county'] = self.county
+            df['city'] = self.county_config['city']
 
             return df
 
@@ -199,14 +241,14 @@ class InvestorPipeline:
 
     def export_investors(self,
                         df: pd.DataFrame,
-                        filename: str = 'investor_prospects.csv',
+                        filename: str = None,
                         by_tier: bool = True) -> List[str]:
         """
         Export investor prospects to CSV.
 
         Args:
             df: DataFrame of investor prospects
-            filename: Base filename for export
+            filename: Base filename for export (default: county-specific name)
             by_tier: Also export separate files by tier
 
         Returns:
@@ -215,6 +257,10 @@ class InvestorPipeline:
         if df.empty:
             log_failure("No investors to export")
             return []
+
+        # Default filename includes county
+        if filename is None:
+            filename = f'investor_prospects_{self.county}.csv'
 
         exported_files = []
 
@@ -225,7 +271,7 @@ class InvestorPipeline:
         all_path = PROCESSED_DATA_DIR / filename
         df.to_csv(all_path, index=False)
         exported_files.append(str(all_path))
-        log_success(f"Exported {len(df):,} investors to {all_path}")
+        log_success(f"Exported {len(df):,} {self.county_config['city']} investors to {all_path}")
 
         # Export by tier
         if by_tier:
