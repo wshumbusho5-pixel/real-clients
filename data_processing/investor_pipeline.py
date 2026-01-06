@@ -157,6 +157,8 @@ class InvestorPipeline:
                 'LUCDesc': 'property_type',
                 'Property Type': 'property_type',
                 'Neighborhood': 'neighborhood',
+                'MarketValue': 'market_value',
+                'Market Value': 'market_value',
             }
 
             # Keep only columns that exist (first match wins)
